@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Bell, Volume2, VolumeX, Save, Smartphone } from 'lucide-react';
-import { showPushNotification } from '../utils/notifications';
+import { requestNotificationPermission, showPushNotification, subscribeToPushNotifications } from '../utils/notifications';
 import { User } from '../types';
 
 interface Props {
@@ -51,8 +51,18 @@ export default function ProfileSettings({ isOpen, onClose, user }: Props) {
     }
   }, [isOpen, user.id]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     localStorage.setItem(`rq_notification_prefs_${user.id}`, JSON.stringify(prefs));
+    if (prefs.pushEnabled) {
+      const granted = await requestNotificationPermission();
+      if (granted) {
+        await subscribeToPushNotifications(user.id);
+      } else {
+        setPrefs({...prefs, pushEnabled: false});
+        localStorage.setItem(`rq_notification_prefs_${user.id}`, JSON.stringify({...prefs, pushEnabled: false}));
+        alert("Notification permission denied by browser. Please enable it in browser settings.");
+      }
+    }
     onClose();
   };
 

@@ -76,3 +76,14 @@ export interface ActivityLog {
   created_at: string;
 }
 
+export interface DriverCoordinates {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+  speed?: number | null;
+  heading?: number | null;
+  altitude?: number | null;
+  timestamp?: number;
+  isFallback?: boolean;
+}
+

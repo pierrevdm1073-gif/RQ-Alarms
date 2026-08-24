@@ -5,6 +5,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import webpush from 'web-push';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { hasPermission } from './src/utils/permissions.ts';
 import { GoogleGenAI } from '@google/genai';
@@ -52,7 +53,13 @@ async function startServer() {
   };
 
   if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
-    vapidKeys = webpush.generateVAPIDKeys();
+    const vapidPath = path.join(process.cwd(), 'vapid.json');
+    if (fs.existsSync(vapidPath)) {
+      vapidKeys = JSON.parse(fs.readFileSync(vapidPath, 'utf8'));
+    } else {
+      vapidKeys = webpush.generateVAPIDKeys();
+      fs.writeFileSync(vapidPath, JSON.stringify(vapidKeys, null, 2));
+    }
   }
 
   try {
@@ -62,16 +69,7 @@ async function startServer() {
       vapidKeys.privateKey
     );
   } catch (err) {
-    vapidKeys = webpush.generateVAPIDKeys();
-    try {
-      webpush.setVapidDetails(
-        'mailto:pierrevdm1073@gmail.com',
-        vapidKeys.publicKey,
-        vapidKeys.privateKey
-      );
-    } catch (finalErr) {
-      console.error('Failed to set VAPID details:', finalErr);
-    }
+    console.error('Failed to set VAPID details:', err);
   }
 
   const pubKey = vapidKeys.publicKey;
@@ -618,18 +616,22 @@ db.pragma('journal_mode = WAL');
 
   app.post('/api/drivers/:id/shift/start', (req, res) => {
     const driverId = req.params.id;
-    // Auto-close any unclosed shifts for this driver just in case
+    
+    // Check if there is already an unclosed active shift for this driver
+    let activeShift = null;
     try {
-      db.prepare("UPDATE driver_shifts SET end_time = datetime('now') WHERE driver_id = ? AND end_time IS NULL").run(driverId);
+      activeShift = db.prepare("SELECT id FROM driver_shifts WHERE driver_id = ? AND end_time IS NULL ORDER BY start_time DESC LIMIT 1").get(driverId) as any;
     } catch (e) {
-      console.error('Error auto-closing old shifts:', e);
+      console.error('Error querying active shift:', e);
     }
     
-    // Insert new shift
-    try {
-      db.prepare("INSERT INTO driver_shifts (driver_id, start_time, distance_covered, alarms_completed) VALUES (?, datetime('now'), 0, 0)").run(driverId);
-    } catch (e) {
-      console.error('Error inserting new shift:', e);
+    // Insert new shift only if no active shift exists (shifts only end manually)
+    if (!activeShift) {
+      try {
+        db.prepare("INSERT INTO driver_shifts (driver_id, start_time, distance_covered, alarms_completed) VALUES (?, datetime('now'), 0, 0)").run(driverId);
+      } catch (e) {
+        console.error('Error inserting new shift:', e);
+      }
     }
 
     db.prepare("UPDATE users SET is_on_shift = 1 WHERE id = ?").run(driverId);

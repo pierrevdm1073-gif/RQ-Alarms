@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { User, Vehicle, Alarm } from '../types';
-import { Car, MapPin, Clock, CheckCircle2, AlertCircle, Bell, X, Smartphone, LogOut, Settings as SettingsIcon, AlertTriangle, Volume2, VolumeX, Activity, History } from 'lucide-react';
+import { User, Vehicle, Alarm, DriverCoordinates } from '../types';
+import { Car, MapPin, Clock, CheckCircle2, AlertCircle, Bell, X, Smartphone, LogOut, Settings as SettingsIcon, AlertTriangle, Volume2, VolumeX, Activity, History, Navigation, Radio, Crosshair } from 'lucide-react';
 import FeedbackForm from './FeedbackForm';
 import { io } from 'socket.io-client';
 import Logo from './Logo';
@@ -9,6 +9,7 @@ import { requestNotificationPermission, showPushNotification, subscribeToPushNot
 import DriverAlarmMap from './DriverAlarmMap';
 import DriverPerformance from './DriverPerformance';
 import DriverHistory from './DriverHistory';
+import { useWakeLock } from '../hooks/useWakeLock';
 import React from 'react';
 
 interface DriverDashboardProps {
@@ -17,6 +18,8 @@ interface DriverDashboardProps {
 }
 
 export default function DriverDashboard({ user, onLogout }: DriverDashboardProps) {
+  useWakeLock(true); // Keep screen awake while dashboard is open
+
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'dispatches' | 'performance' | 'history'>('dispatches');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => {
@@ -142,9 +145,24 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
 
   const [activeAlarm, setActiveAlarm] = useState<Alarm | null>(null);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<{id: number, message: string}[]>([]);
-  const [driverLocation, setDriverLocation] = useState<{lat: number, lng: number} | null>(null);
-  const locationRef = useRef<{lat: number, lng: number} | null>(null);
+  const [pushPermission, setPushPermission] = useState<NotificationPermission>(
+    'Notification' in window ? Notification.permission : 'default'
+  );
+
+  const handleEnablePush = async () => {
+    const granted = await requestNotificationPermission();
+    if (granted && user.id) {
+      await subscribeToPushNotifications(user.id);
+      setPushPermission('granted');
+    } else {
+      setPushPermission('denied');
+    }
+  };
+  const [driverLocation, setDriverLocation] = useState<DriverCoordinates | null>(null);
+  const locationRef = useRef<DriverCoordinates | null>(null);
+  const [isRefreshingGPS, setIsRefreshingGPS] = useState(false);
 
   useEffect(() => {
     locationRef.current = driverLocation;
@@ -237,6 +255,118 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
     const localActive = localStorage.getItem(`rq_shift_active_${user.id}`) === 'true';
     return localActive || !!user.is_on_shift;
   });
+
+  // Derive real-time driver status for header and control room telemetry
+  const currentStatusInfo = (() => {
+    if (!shiftActive) {
+      return {
+        label: 'Off Duty',
+        statusKey: 'off_duty',
+        bg: 'bg-slate-100',
+        text: 'text-slate-600',
+        border: 'border-slate-200',
+        dotColor: 'bg-slate-400',
+        ping: false,
+        icon: 'off',
+        description: 'Shift is currently not active'
+      };
+    }
+    
+    // Check if responding to an alarm
+    const respondingAlarm = alarms.find(a => a.status === 'responding' || a.status === 'pending' || a.status === 'en_route');
+    if (respondingAlarm) {
+      return {
+        label: 'En Route',
+        statusKey: 'en_route',
+        bg: 'bg-amber-50',
+        text: 'text-amber-700',
+        border: 'border-amber-200',
+        dotColor: 'bg-amber-500',
+        ping: true,
+        icon: 'en_route',
+        description: `En route to ${respondingAlarm.client_name || respondingAlarm.address}`
+      };
+    }
+    
+    // Check if arrived on scene
+    const arrivedAlarm = alarms.find(a => a.status === 'arrived');
+    if (arrivedAlarm) {
+      return {
+        label: 'On Scene',
+        statusKey: 'on_scene',
+        bg: 'bg-blue-50',
+        text: 'text-blue-700',
+        border: 'border-blue-200',
+        dotColor: 'bg-blue-600',
+        ping: true,
+        icon: 'on_scene',
+        description: `On scene at ${arrivedAlarm.client_name || arrivedAlarm.address}`
+      };
+    }
+
+    if (driverStatus === 'busy') {
+      return {
+        label: 'Busy',
+        statusKey: 'busy',
+        bg: 'bg-rose-50',
+        text: 'text-rose-700',
+        border: 'border-rose-200',
+        dotColor: 'bg-rose-500',
+        ping: false,
+        icon: 'busy',
+        description: 'Marked busy / temporary break'
+      };
+    }
+
+    return {
+      label: 'Idle',
+      statusKey: 'idle',
+      bg: 'bg-emerald-50',
+      text: 'text-emerald-700',
+      border: 'border-emerald-200',
+      dotColor: 'bg-emerald-500',
+      ping: true,
+      icon: 'idle',
+      description: 'Active on shift, standby for dispatches'
+    };
+  })();
+
+  const handleToggleManualStatus = async () => {
+    if (!shiftActive) return;
+    const nextStatus = driverStatus === 'available' ? 'busy' : 'available';
+    setDriverStatus(nextStatus);
+
+    if (socketRef.current) {
+      socketRef.current.emit('driver_status_change', {
+        driverId: user.id,
+        status: nextStatus
+      });
+      const activeAlarmObj = alarms.find(a => a.status === 'responding' || a.status === 'pending' || a.status === 'en_route' || a.status === 'arrived');
+      const loc = locationRef.current || (selectedVehicle?.lat && selectedVehicle?.lng ? { lat: selectedVehicle.lat, lng: selectedVehicle.lng } : { lat: -26.2041, lng: 28.0473 });
+      socketRef.current.emit('driver_location_update', {
+        driverId: user.id,
+        driverName: user.username,
+        vehicleId: selectedVehicle?.id,
+        status: nextStatus,
+        activeStatusText: nextStatus === 'busy' ? 'Busy' : (activeAlarmObj ? (activeAlarmObj.status === 'arrived' ? 'On Scene' : 'En Route') : 'Idle'),
+        activeAlarm: activeAlarmObj,
+        ...loc
+      });
+    }
+
+    try {
+      await fetch(`/api/users/${user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requesterId: user.id,
+          status: nextStatus
+        })
+      });
+    } catch (e) {
+      console.warn('Status change sync warning:', e);
+    }
+  };
   const [deviceShiftConfirmed, setDeviceShiftConfirmed] = useState(() => {
     return localStorage.getItem(`rq_shift_active_${user.id}`) === 'true';
   });
@@ -246,6 +376,8 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
   const [wakeLockRequested, setWakeLockRequested] = useState(() => {
     return localStorage.getItem(`rq_shift_active_${user.id}`) === 'true';
   });
+  const [showEndShiftConfirmModal, setShowEndShiftConfirmModal] = useState(false);
+  const [isEndingShift, setIsEndingShift] = useState(false);
   const [shiftSummary, setShiftSummary] = useState<{
     startTime: string;
     endTime: string;
@@ -350,8 +482,7 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
 
   useEffect(() => {
     const initNotifications = async () => {
-      const granted = await requestNotificationPermission();
-      if (granted && user.id) {
+      if ('Notification' in window && Notification.permission === 'granted' && user.id) {
         await subscribeToPushNotifications(user.id);
       }
     };
@@ -487,21 +618,38 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
     let watchId: number;
     let heartbeatId: number;
 
-    if (shiftActive && navigator.geolocation) {
+    const extractCoordinates = (pos: GeolocationPosition): DriverCoordinates => ({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy,
+      speed: pos.coords.speed,
+      heading: pos.coords.heading,
+      altitude: pos.coords.altitude,
+      timestamp: pos.timestamp || Date.now(),
+      isFallback: false
+    });
+
+    if (navigator.geolocation) {
       const sendLocation = (position?: GeolocationPosition) => {
-        const currentLoc = position ? { lat: position.coords.latitude, lng: position.coords.longitude } : locationRef.current;
+        const currentLoc: DriverCoordinates | null = position ? extractCoordinates(position) : locationRef.current;
         
         if (!currentLoc) return;
         
         if (position) setDriverLocation(currentLoc);
 
-        socket.emit('driver_location_update', {
-          driverId: user.id,
-          driverName: user.username,
-          vehicleId: selectedVehicle?.id,
-          isSOS: localStorage.getItem(`rq_driver_sos_${user.id}`) === 'true',
-          ...currentLoc
-        });
+        if (shiftActive) {
+          const activeAlarmObj = alarms.find(a => a.status === 'responding' || a.status === 'pending' || a.status === 'en_route' || a.status === 'arrived');
+          socket.emit('driver_location_update', {
+            driverId: user.id,
+            driverName: user.username,
+            vehicleId: selectedVehicle?.id,
+            status: driverStatus,
+            activeStatusText: currentStatusInfo.label,
+            activeAlarm: activeAlarmObj,
+            isSOS: localStorage.getItem(`rq_driver_sos_${user.id}`) === 'true',
+            ...currentLoc
+          });
+        }
       };
 
       const handleLocationError = (context: string, error: any) => {
@@ -509,37 +657,43 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
         
         // If there's no location currently set, let's use the vehicle's position or a default one as fallback
         if (!locationRef.current) {
-          const fallbackLoc = selectedVehicle && selectedVehicle.lat && selectedVehicle.lng
-            ? { lat: selectedVehicle.lat, lng: selectedVehicle.lng }
-            : { lat: -26.2041, lng: 28.0473 }; // Default Johannesburg center
+          const fallbackLoc: DriverCoordinates = {
+            lat: selectedVehicle && selectedVehicle.lat ? selectedVehicle.lat : -26.2041,
+            lng: selectedVehicle && selectedVehicle.lng ? selectedVehicle.lng : 28.0473,
+            accuracy: 50,
+            timestamp: Date.now(),
+            isFallback: true
+          };
           
           setDriverLocation(fallbackLoc);
-          socket.emit('driver_location_update', {
-            driverId: user.id,
-            driverName: user.username,
-            vehicleId: selectedVehicle?.id,
-            isSOS: localStorage.getItem(`rq_driver_sos_${user.id}`) === 'true',
-            ...fallbackLoc
-          });
+          if (shiftActive) {
+            socket.emit('driver_location_update', {
+              driverId: user.id,
+              driverName: user.username,
+              vehicleId: selectedVehicle?.id,
+              isSOS: localStorage.getItem(`rq_driver_sos_${user.id}`) === 'true',
+              ...fallbackLoc
+            });
+          }
         }
       };
 
       navigator.geolocation.getCurrentPosition(
         sendLocation,
         (error) => handleLocationError('Error getting initial location', error),
-        { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 }
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
       );
 
       watchId = navigator.geolocation.watchPosition(
         sendLocation,
         (error) => handleLocationError('Error watching location', error),
-        { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 }
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
       );
 
-      // Heartbeat: Send location update every 30s even if stationary
+      // Heartbeat: Send location update every 20s even if stationary
       heartbeatId = window.setInterval(() => {
         sendLocation();
-      }, 30000);
+      }, 20000);
     }
 
     return () => {
@@ -549,6 +703,52 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
       socketRef.current = null;
     };
   }, [user.id, shiftActive, fetchAlarms, selectedVehicle?.id]);
+
+  const handleRefreshGPS = useCallback(() => {
+    if (!navigator.geolocation) {
+      alert('Geolocation API is not supported by your browser.');
+      return;
+    }
+
+    setIsRefreshingGPS(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords: DriverCoordinates = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          speed: pos.coords.speed,
+          heading: pos.coords.heading,
+          altitude: pos.coords.altitude,
+          timestamp: pos.timestamp || Date.now(),
+          isFallback: false
+        };
+
+        setDriverLocation(coords);
+        locationRef.current = coords;
+        setIsRefreshingGPS(false);
+
+        if (socketRef.current && shiftActive) {
+          const activeAlarmObj = alarms.find(a => a.status === 'responding' || a.status === 'pending' || a.status === 'en_route' || a.status === 'arrived');
+          socketRef.current.emit('driver_location_update', {
+            driverId: user.id,
+            driverName: user.username,
+            vehicleId: selectedVehicle?.id,
+            status: driverStatus,
+            activeStatusText: currentStatusInfo.label,
+            activeAlarm: activeAlarmObj,
+            isSOS: localStorage.getItem(`rq_driver_sos_${user.id}`) === 'true',
+            ...coords
+          });
+        }
+      },
+      (err) => {
+        console.warn('Manual GPS refresh error:', err);
+        setIsRefreshingGPS(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [user.id, user.username, selectedVehicle?.id, shiftActive, driverStatus, currentStatusInfo.label, alarms]);
 
   useEffect(() => {
     localStorage.setItem(`rq_alarms_${user.id}`, JSON.stringify(alarms));
@@ -889,15 +1089,30 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
     }
   };
 
-  const handleEndShift = async () => {
+  const handleLogoutRequest = () => {
     if (alarms.length > 0) {
-      alert("You cannot end your shift while you have active alarms.");
+      alert("You cannot log out while you have active alarms.");
       return;
     }
+    // Only manual shift ending: logging out simply signs out without ending the shift
+    onLogout();
+  };
+
+  const handleInitiateEndShift = () => {
+    if (alarms.length > 0) {
+      alert("You cannot end your shift while you have active alarms. Please resolve or reassign all alarms first.");
+      return;
+    }
+    setShowEndShiftConfirmModal(true);
+  };
+
+  const handleConfirmEndShift = async () => {
+    setIsEndingShift(true);
     try {
       const response = await fetch(`/api/drivers/${user.id}/shift/end`, { method: 'POST' });
       const data = await response.json();
       
+      setShowEndShiftConfirmModal(false);
       if (data.success && data.summary) {
         setShiftSummary(data.summary);
       } else {
@@ -912,6 +1127,8 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
     } catch (error) {
       console.error('Error ending shift:', error);
       alert('Failed to end shift. Please try again.');
+    } finally {
+      setIsEndingShift(false);
     }
   };
 
@@ -956,16 +1173,41 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
 
   return (
     <div className="space-y-4 max-w-full relative px-4 pb-6">
-      <header className="bg-white text-slate-900 px-4 py-3 shadow-sm border-b border-slate-200 flex justify-between items-center -mx-4 mb-4 sticky top-0 z-40">
-        <div className="flex items-center gap-2">
+      <header className="bg-white text-slate-900 px-3 sm:px-4 py-2.5 shadow-sm border-b border-slate-200 flex justify-between items-center -mx-4 mb-4 sticky top-0 z-40">
+        <div className="flex items-center gap-2 flex-wrap">
           <Logo size="xs" />
-          <span className={`font-bold tracking-tight px-2 py-0.5 rounded border uppercase text-[10px] ${
-            shiftActive 
-              ? 'text-emerald-600 bg-emerald-50 border-emerald-100' 
-              : 'text-rq-gold bg-rq-gold/10 border-rq-gold/20'
-          }`}>
-            {shiftActive ? 'Active Shift' : 'Operations'}
-          </span>
+          
+          {/* Real-time Driver State Indicator */}
+          <div
+            id="driver-realtime-status-badge"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold transition-all shadow-2xs ${currentStatusInfo.bg} ${currentStatusInfo.text} ${currentStatusInfo.border}`}
+            title={`Status: ${currentStatusInfo.label} — ${currentStatusInfo.description}`}
+          >
+            <span className="relative flex h-2 w-2">
+              {currentStatusInfo.ping && (
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${currentStatusInfo.dotColor}`}></span>
+              )}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${currentStatusInfo.dotColor}`}></span>
+            </span>
+            <span className="tracking-wide uppercase text-[10px] font-extrabold flex items-center gap-1">
+              {currentStatusInfo.icon === 'en_route' && <Navigation size={10} className="inline text-amber-600 animate-pulse" />}
+              {currentStatusInfo.icon === 'on_scene' && <MapPin size={10} className="inline text-blue-600" />}
+              {currentStatusInfo.label}
+            </span>
+          </div>
+
+          {/* Quick status switch button if on shift and no active alarm */}
+          {shiftActive && !alarms.some(a => a.status === 'responding' || a.status === 'pending' || a.status === 'arrived') && (
+            <button
+              onClick={handleToggleManualStatus}
+              id="driver-status-toggle-btn"
+              className="text-[10px] font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded border border-slate-200 transition-colors cursor-pointer"
+              title="Click to toggle between Idle (Available) and Busy"
+            >
+              Set {driverStatus === 'available' ? 'Busy' : 'Idle'}
+            </button>
+          )}
+
           {isOffline && (
             <span id="driver-offline-badge" className="font-bold tracking-tight px-2.5 py-0.5 rounded-full border uppercase text-[10px] bg-rose-50 text-rose-700 border-rose-200 flex items-center gap-1 animate-pulse">
               <AlertTriangle size={12} className="text-rose-600" />
@@ -973,7 +1215,7 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
             </span>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5 items-center">
           <button
             onClick={() => setTtsEnabled(prev => !prev)}
             className={`p-2 rounded-lg transition-colors flex items-center justify-center ${
@@ -981,28 +1223,45 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
             }`}
             title={ttsEnabled ? "Disable Voice Dispatch Announcements" : "Enable Voice Dispatch Announcements"}
           >
-            {ttsEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            {ttsEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
           </button>
           <button
             onClick={() => setShowSettings(true)}
             className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
           >
-            <SettingsIcon size={20} />
+            <SettingsIcon size={18} />
           </button>
           <button
-            onClick={onLogout}
-            disabled={shiftActive}
-            className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${
-              shiftActive 
-                ? 'text-slate-300 cursor-not-allowed' 
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-            title={shiftActive ? "End shift to logout" : "Logout"}
+            onClick={handleLogoutRequest}
+            className="p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-lg transition-colors flex items-center gap-2 cursor-pointer"
+            title="Logout"
           >
-            <LogOut size={20} />
+            <LogOut size={18} />
           </button>
         </div>
       </header>
+
+      {pushPermission === 'default' && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 flex items-center justify-between shadow-sm -mt-2">
+          <div className="flex items-center gap-3">
+            <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+              <Bell size={20} className="animate-pulse" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-800">Enable Dispatch Alerts</h4>
+              <p className="text-xs text-slate-600">Get notified of new alarms in the background.</p>
+            </div>
+          </div>
+          <button 
+            onClick={handleEnablePush}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+          >
+            Allow
+          </button>
+        </div>
+      )}
+
+      {/* Main Stats/Content */}
 
       {showSettings && <ProfileSettings isOpen={showSettings} onClose={() => setShowSettings(false)} user={user} />}
 
@@ -1297,47 +1556,23 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
                 </div>
               )}
               <button 
-                onClick={handleSOSToggle}
-                className={`w-full sm:w-auto px-5 py-2 rounded-lg font-black transition-all border flex items-center justify-center gap-2 shadow-sm uppercase text-sm cursor-pointer ${
-                  isSOS 
-                    ? 'bg-red-600 text-white border-red-500 animate-pulse ring-4 ring-red-300' 
-                    : 'bg-red-500 hover:bg-red-600 text-white border-red-600'
-                }`}
-                title="Trigger System-Wide High-Priority SOS Emergency Alert"
-              >
-                <AlertTriangle size={18} className={isSOS ? 'animate-[bounce_0.8s_infinite]' : ''} />
-                <span>{isSOS ? 'SOS Active' : 'Trigger SOS'}</span>
-              </button>
-              <button 
-                onClick={handleEndShift}
-                className="w-full sm:w-auto bg-red-50 text-red-600 hover:bg-red-100 px-4 py-2 rounded-lg font-medium transition-colors border border-red-100 cursor-pointer text-sm"
+                id="btn-end-shift-initiate"
+                onClick={handleInitiateEndShift}
+                className="w-full sm:w-auto bg-red-50 hover:bg-red-100 text-red-600 px-4 py-2 rounded-xl font-bold transition-colors border border-red-200 cursor-pointer text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-xs"
+                title="End duty shift manually"
               >
                 End Shift
               </button>
             </div>
           </div>
 
-          {isSOS && (
-            <div className="bg-red-600 border-2 border-red-500 text-white p-4 rounded-2xl shadow-xl flex items-center justify-between gap-4 animate-pulse mb-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-white text-red-600 rounded-full animate-bounce">
-                  <AlertTriangle size={20} />
-                </div>
-                <div>
-                  <h3 className="font-black text-base uppercase tracking-wider">⚠️ EMERGENCY SOS ACTIVE</h3>
-                  <p className="text-xs text-red-100 mt-0.5">Your exact GPS coordinates are live and broadcasted in red to the Control Room.</p>
-                </div>
-              </div>
-              <button 
-                onClick={handleSOSToggle}
-                className="bg-white text-red-600 font-bold px-3 py-1.5 rounded-lg text-xs transition-colors hover:bg-slate-100 shadow cursor-pointer uppercase"
-              >
-                Cancel SOS
-              </button>
-            </div>
-          )}
-
-          <DriverAlarmMap alarms={alarms} driverLocation={driverLocation} etas={etas} />
+          <DriverAlarmMap 
+            alarms={alarms} 
+            driverLocation={driverLocation} 
+            etas={etas} 
+            onRefreshGPS={handleRefreshGPS}
+            isRefreshingGPS={isRefreshingGPS}
+          />
 
           <div className="flex items-center justify-between mb-4 mt-8">
             <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
@@ -1466,6 +1701,48 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
         </>
       )}
 
+      {/* End Shift Confirmation Modal (Shifts only end manually) */}
+      {showEndShiftConfirmModal && (
+        <div id="end-shift-confirm-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-100 overflow-hidden p-6 flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mb-4">
+              <AlertCircle size={28} />
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-900 tracking-tight text-center">End Active Shift?</h3>
+            <p className="text-xs text-slate-500 text-center mt-2 mb-6 leading-relaxed">
+              Shifts must be ended manually. Finalizing your shift will calculate total distance covered, log completed incidents, and set your status to Off Duty.
+            </p>
+
+            <div className="flex flex-col gap-2.5 w-full">
+              <button
+                id="btn-confirm-end-shift"
+                onClick={handleConfirmEndShift}
+                disabled={isEndingShift}
+                className="w-full bg-red-600 hover:bg-red-700 active:scale-98 text-white font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isEndingShift ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    Finalizing Shift...
+                  </>
+                ) : (
+                  'Confirm & End Shift'
+                )}
+              </button>
+              
+              <button
+                onClick={() => setShowEndShiftConfirmModal(false)}
+                disabled={isEndingShift}
+                className="w-full bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 font-semibold py-2.5 px-4 rounded-xl text-sm transition-colors cursor-pointer"
+              >
+                Keep Shift Active
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {shiftSummary && (
         <div id="shift-summary-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 duration-200 p-6 flex flex-col items-center">
@@ -1535,7 +1812,7 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
               onClick={closeShiftSummaryAndCleanup}
               className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-2xl shadow-lg transition-all transform hover:scale-[1.01] active:scale-95 text-center uppercase tracking-wider text-sm cursor-pointer"
             >
-              Close Summary & Log Out
+              Close Summary
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Vehicle, User, Alarm, Feedback, Client, NotificationSettings, ActivityLog } from '../types';
-import { Plus, Car, ShieldCheck, Users, AlertTriangle, MapPin, Clock, CheckCircle2, X, UserPlus, Trash2, Bell, Map as MapIcon, Search, Filter, User as UserIcon, Edit2, LogOut, Settings as SettingsIcon, Building2, Phone, MessageSquare, Send, Key, Database, Monitor, Smartphone, Sparkles, Download, RefreshCw, FileText } from 'lucide-react';
+import { Plus, Car, ShieldCheck, Users, AlertTriangle, MapPin, Clock, CheckCircle2, X, UserPlus, Trash2, Bell, Map as MapIcon, Search, Filter, User as UserIcon, Edit2, LogOut, Settings as SettingsIcon, Building2, Phone, MessageSquare, Send, Key, Database, Monitor, Smartphone, Sparkles, Download, RefreshCw, FileText, Maximize2, Minimize2, Laptop } from 'lucide-react';
 import AddressAutocomplete from './AddressAutocomplete';
 import { io } from 'socket.io-client';
 import DriverMap from './DriverMap';
@@ -8,6 +8,8 @@ import Logo from './Logo';
 import PhoneContainer from './PhoneContainer';
 import { requestNotificationPermission, showPushNotification } from '../utils/notifications';
 import { hasPermission } from '../utils/permissions';
+import { useWakeLock } from '../hooks/useWakeLock';
+import { detectDevice } from '../utils/device';
 
 interface Props {
   user: User;
@@ -17,9 +19,35 @@ interface Props {
 }
 
 export default function AdminDashboard({ user, onLogout, viewMode: propViewMode, onViewModeChange }: Props) {
+  useWakeLock(true); // Keep screen awake for dispatchers
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [deviceInfo] = useState(() => detectDevice());
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => {
+        console.warn('Fullscreen request failed:', err);
+      });
+    } else {
+      document.exitFullscreen().catch(err => {
+        console.warn('Exit fullscreen failed:', err);
+      });
+    }
+  };
+
   const [localViewMode, setLocalViewMode] = useState<'computer' | 'phone'>('computer');
   const viewMode = propViewMode || localViewMode;
   const setViewMode = onViewModeChange || setLocalViewMode;
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -482,7 +510,7 @@ Confidential • RQ Response Security Fleet Internal Operations Only
       }
     });
 
-    socket.on('driver_location_update', (data: { driverId: number, driverName: string, vehicleId?: number, lat: number, lng: number, lastUpdated?: number, history?: any[], isOffline?: boolean }) => {
+    socket.on('driver_location_update', (data: { driverId: number, driverName: string, vehicleId?: number, lat: number, lng: number, lastUpdated?: number, history?: any[], isOffline?: boolean, status?: 'available' | 'busy', activeStatusText?: string, activeAlarm?: any }) => {
       setDriverLocations(prev => ({
         ...prev,
         [data.driverId]: {
@@ -906,54 +934,87 @@ Confidential • RQ Response Security Fleet Internal Operations Only
   };
 
   return (
-    <div className="space-y-6 relative">
-      <header className={`bg-white text-slate-900 p-4 shadow-sm border-b border-slate-200 flex justify-between items-center mb-8 sticky top-0 z-40 ${
-        viewMode === 'phone' 
-          ? '-mx-4 -mt-4' 
-          : '-mx-4 md:-mx-8 -mt-4 md:-mt-8'
-      }`}>
-        <div className="flex items-center gap-2">
+    <div className="space-y-6 relative w-full px-3 sm:px-6 lg:px-8 pb-10">
+      <header className="bg-white text-slate-900 px-4 sm:px-6 py-3 shadow-sm border-b border-slate-200 flex justify-between items-center -mx-3 sm:-mx-6 lg:-mx-8 mb-6 sticky top-0 z-40">
+        <div className="flex items-center gap-3">
           <Logo size="sm" />
-          <span className="font-bold tracking-tight text-rq-gold hidden sm:inline px-2 py-0.5 bg-rq-gold/10 rounded border border-rq-gold/20 uppercase text-[10px]">Dispatch</span>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 text-white rounded-lg text-xs font-mono font-bold shadow-sm">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="tracking-wide uppercase text-[10px]">Chrome Dispatch Console</span>
+          </div>
+          {deviceInfo?.isChrome && (
+            <span className="hidden lg:inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+              <Laptop size={12} className="text-slate-600" />
+              Chrome Optimized
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-2 sm:gap-4">
-          <span className="text-sm text-slate-600 hidden md:inline">
-            <strong className="text-slate-900">{user.username}</strong> ({user.role})
+        <div className="flex items-center gap-2 sm:gap-3">
+          <span className="text-xs sm:text-sm text-slate-600 hidden md:inline font-mono">
+            <strong className="text-slate-900 font-sans">{user.username}</strong> ({user.role})
           </span>
+
+          {/* Fullscreen Workstation Toggle */}
           <button
-            id="btn-toggle-viewmode"
-            onClick={() => setViewMode(viewMode === 'computer' ? 'phone' : 'computer')}
-            className="text-xs bg-slate-100 hover:bg-slate-200 px-2 sm:px-3 py-1.5 rounded-xl transition-all text-slate-700 flex items-center gap-1.5 font-bold border border-slate-200 shadow-sm"
-            title={viewMode === 'computer' ? "Simulate on Mobile" : "Switch to Computer View"}
+            id="btn-toggle-fullscreen"
+            onClick={toggleFullscreen}
+            className="text-xs bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-xl transition-all text-slate-700 flex items-center gap-1.5 font-bold border border-slate-200 shadow-xs cursor-pointer"
+            title={isFullscreen ? "Exit Fullscreen (F11)" : "Enter Fullscreen Workstation Mode (F11)"}
           >
-            {viewMode === 'computer' ? (
+            {isFullscreen ? (
               <>
-                <Smartphone size={14} className="text-slate-600" />
-                <span className="hidden sm:inline">Mobile Screen</span>
+                <Minimize2 size={14} className="text-slate-700" />
+                <span className="hidden xl:inline">Exit Fullscreen</span>
               </>
             ) : (
               <>
-                <Monitor size={14} className="text-slate-600" />
-                <span className="hidden sm:inline">Computer Screen</span>
+                <Maximize2 size={14} className="text-slate-700" />
+                <span className="hidden xl:inline">Fullscreen (F11)</span>
               </>
             )}
           </button>
+
           <button
             onClick={() => setActiveTab('settings')}
-            className="text-sm bg-slate-100 hover:bg-slate-200 p-1.5 rounded-lg transition-colors text-slate-700 border border-slate-200"
+            className="text-sm bg-slate-100 hover:bg-slate-200 p-2 rounded-xl transition-colors text-slate-700 border border-slate-200 cursor-pointer shadow-xs"
             title="Settings"
           >
-            <SettingsIcon size={18} />
+            <SettingsIcon size={16} />
           </button>
           <button
             onClick={onLogout}
-            className="text-sm bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors text-slate-700 flex items-center gap-2 border border-slate-200"
+            className="text-xs sm:text-sm bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl transition-colors text-slate-700 flex items-center gap-1.5 font-semibold border border-slate-200 cursor-pointer shadow-xs"
           >
-            <LogOut size={16} />
+            <LogOut size={15} />
             <span className="hidden sm:inline">Logout</span>
           </button>
         </div>
       </header>
+
+      {/* Advisory Banner if accessed on Mobile or Non-Chrome */}
+      {deviceInfo?.isMobile && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-center justify-between shadow-xs -mt-2">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-100 text-amber-700 rounded-xl">
+              <Laptop size={18} />
+            </div>
+            <div>
+              <h4 className="text-xs sm:text-sm font-bold text-amber-900">
+                Optimized for Google Chrome on Desktop
+              </h4>
+              <p className="text-[11px] sm:text-xs text-amber-700">
+                The Control Room is designed for large workstation monitors. For field responder operations on mobile, use the Android Driver Terminal.
+              </p>
+            </div>
+          </div>
+          <a
+            href="/driver"
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl whitespace-nowrap transition-colors"
+          >
+            Open Driver MDT
+          </a>
+        </div>
+      )}
 
       {/* Notifications Container */}
       <div className="fixed top-20 right-4 z-50 flex flex-col gap-2 max-w-md w-full sm:w-80">
@@ -1252,9 +1313,24 @@ Confidential • RQ Response Security Fleet Internal Operations Only
                             </span>
                           </div>
                         ) : driverLocations[driver.id] ? (
-                          <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                            <CheckCircle2 size={10} /> LIVE TRACKING
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-0.5">
+                              <CheckCircle2 size={10} /> LIVE
+                            </span>
+                            {driverLocations[driver.id]?.activeStatusText && (
+                              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded inline-flex items-center gap-1 ${
+                                driverLocations[driver.id].activeStatusText === 'En Route'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : driverLocations[driver.id].activeStatusText === 'On Scene'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : driverLocations[driver.id].activeStatusText === 'Busy'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {driverLocations[driver.id].activeStatusText}
+                              </span>
+                            )}
+                          </div>
                         ) : null}
                       </div>
                       {driver.is_on_shift ? (

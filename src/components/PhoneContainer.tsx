@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Wifi, Battery, Signal, Smartphone } from 'lucide-react';
+import { Wifi, Battery, Signal } from 'lucide-react';
+import { isAndroid } from '../utils/device';
 
 interface PhoneContainerProps {
   children: React.ReactNode;
@@ -10,8 +11,10 @@ interface PhoneContainerProps {
 
 export default function PhoneContainer({ children, title, className = '', isSimulatedOnly = false }: PhoneContainerProps) {
   const [timeStr, setTimeStr] = useState('12:00');
+  const [isRealAndroid, setIsRealAndroid] = useState(false);
 
   useEffect(() => {
+    setIsRealAndroid(isAndroid());
     const updateTime = () => {
       const now = new Date();
       let hours = now.getHours();
@@ -23,69 +26,61 @@ export default function PhoneContainer({ children, title, className = '', isSimu
     return () => clearInterval(timer);
   }, []);
 
-  // Responsive device container wrapper:
-  // On md screens (desktop), it renders as a beautiful physical phone frame.
-  // On mobile screens, it renders 100% full height and width smoothly.
+  // If on a real Android device and not forcing simulation frame, render 100% full screen
+  if (isRealAndroid && !isSimulatedOnly) {
+    return (
+      <div className={`w-full min-h-[100dvh] h-[100dvh] bg-slate-50 flex flex-col overflow-y-auto overflow-x-hidden ${className}`}>
+        {children}
+      </div>
+    );
+  }
+
+  // Responsive device container wrapper (Android MDT Mockup for desktop/simulated testing):
   const frameClasses = isSimulatedOnly
-    ? `relative w-full max-w-[390px] h-[844px] bg-slate-50 border-[12px] border-slate-900 rounded-[50px] shadow-2xl overflow-hidden flex flex-col ring-4 ring-slate-800/10 mx-auto aspect-[390/844]`
-    : `relative w-full md:max-w-[390px] md:h-[844px] bg-slate-50 md:border-[12px] md:border-slate-900 md:rounded-[50px] md:shadow-2xl overflow-hidden flex flex-col md:ring-4 md:ring-slate-800/10 md:mx-auto md:aspect-[390/844] min-h-screen md:min-h-0`;
-
-  const topNotchClass = isSimulatedOnly 
-    ? "absolute top-2 left-1/2 -translate-x-1/2 w-32 h-6 bg-slate-950 rounded-full z-50 flex items-center justify-center pointer-events-none"
-    : "hidden md:block absolute top-2 left-1/2 -translate-x-1/2 w-32 h-6 bg-slate-950 rounded-full z-50 flex items-center justify-center pointer-events-none";
-
-  const statusBarClass = isSimulatedOnly
-    ? "bg-white text-slate-800 px-6 pt-3 pb-1.5 flex justify-between items-center text-[11px] font-bold tracking-tight select-none border-b border-slate-150 shrink-0 z-40"
-    : "bg-white text-slate-800 px-6 pt-3 pb-1.5 flex md:justify-between justify-end items-center text-[11px] font-bold tracking-tight select-none border-b border-slate-150 shrink-0 z-40";
-
-  const bottomIndicatorClass = isSimulatedOnly
-    ? "flex justify-center items-center bg-white py-2 shrink-0 z-40 border-t border-slate-100"
-    : "hidden md:flex justify-center items-center bg-white py-2 shrink-0 z-40 border-t border-slate-100";
+    ? `relative w-full max-w-[412px] h-[860px] bg-slate-50 border-[10px] border-slate-900 rounded-[44px] shadow-2xl overflow-hidden flex flex-col ring-4 ring-slate-800/20 mx-auto aspect-[412/860]`
+    : `relative w-full md:max-w-[412px] md:h-[860px] bg-slate-50 md:border-[10px] md:border-slate-900 md:rounded-[44px] md:shadow-2xl overflow-hidden flex flex-col md:ring-4 md:ring-slate-800/20 md:mx-auto md:aspect-[412/860] min-h-[100dvh] md:min-h-0`;
 
   return (
-    <div className={`flex flex-col items-center justify-center ${isSimulatedOnly ? '' : 'min-h-screen bg-slate-900/10 md:bg-slate-900/5 py-4 pl-0 pr-0 md:py-8'}`}>
+    <div className={`flex flex-col items-center justify-center ${isSimulatedOnly ? '' : 'min-h-screen bg-slate-950/90 py-3 sm:py-6 px-2 sm:px-4'}`}>
       <div className={frameClasses}>
-        {/* Physical Ear Speaker & Camera Lens (Dynamic Island simulated mockup) */}
-        <div className={topNotchClass}>
-          {/* Camera Pin Hole */}
-          <div className="w-2.5 h-2.5 rounded-full bg-slate-900 absolute left-4 border border-slate-950"></div>
-          {/* Indicator Light */}
-          <div className="w-1.5 h-1.5 rounded-full bg-slate-950 absolute right-4"></div>
+        {/* Android Punch Hole Camera (Top Center) */}
+        <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-4 h-4 bg-slate-950 rounded-full z-50 flex items-center justify-center pointer-events-none ring-1 ring-slate-800">
+          <div className="w-1.5 h-1.5 rounded-full bg-slate-900/80"></div>
         </div>
 
-        {/* Dynamic Hardware/Battery Status and System clock bar */}
-        <div className={statusBarClass}>
-          {(!isSimulatedOnly) && (
-            <span className="font-semibold text-[12px] md:inline hidden">{timeStr}</span>
-          )}
-          {isSimulatedOnly && (
-            <span className="font-semibold text-[12px]">{timeStr}</span>
-          )}
+        {/* Android System Status Bar */}
+        <div className="bg-slate-900 text-slate-200 px-5 pt-2 pb-1.5 flex justify-between items-center text-[11px] font-mono tracking-tight select-none border-b border-slate-800 shrink-0 z-40">
+          <span className="font-bold text-[12px] text-emerald-400">{timeStr}</span>
           
-          <div className="flex items-center gap-1.5 text-slate-700">
-            <Signal size={12} className="stroke-[2.5]" />
-            <span className="text-[9px] font-extrabold uppercase mr-0.5">5G</span>
+          <div className="flex items-center gap-2 text-slate-300">
+            <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-950 px-1 py-0.2 rounded border border-emerald-800">5G MDT</span>
+            <Signal size={12} className="stroke-[2.5] text-emerald-400" />
             <Wifi size={12} className="stroke-[2.5]" />
-            <Battery size={15} className="stroke-[2]" />
+            <div className="flex items-center gap-0.5">
+              <span className="text-[10px] font-bold">98%</span>
+              <Battery size={14} className="stroke-[2] text-emerald-400" />
+            </div>
           </div>
         </div>
 
-        {/* Simulated Display viewport */}
+        {/* Display Viewport */}
         <div className={`flex-1 overflow-y-auto overflow-x-hidden bg-slate-50 relative flex flex-col scrollbar-thin ${className}`}>
           {children}
         </div>
 
-        {/* Simulated iOS/Android home capacitive system swipe indicator */}
-        <div className={bottomIndicatorClass}>
-          <div className="w-28 h-1 bg-slate-950 rounded-full opacity-80"></div>
+        {/* Android System Gesture Bar */}
+        <div className="flex justify-center items-center bg-slate-900 py-2 shrink-0 z-40 border-t border-slate-800">
+          <div className="w-24 h-1 bg-slate-600 rounded-full opacity-80"></div>
         </div>
       </div>
 
       {title && (
-        <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400 mt-2 p-1 bg-slate-100/50 rounded px-2">
-          {title}
-        </span>
+        <div className="mt-3 flex items-center gap-2 px-3 py-1 bg-slate-900/80 border border-slate-800 rounded-full text-slate-400 text-[11px] font-mono">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>{title} (Android MDT)</span>
+        </div>
       )}
     </div>
   );
 }
+

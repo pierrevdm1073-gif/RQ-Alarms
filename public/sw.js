@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rq-dispatch-v2';
+const CACHE_NAME = 'rq-dispatch-v3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -139,7 +139,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
+          if (cacheName !== CACHE_NAME && cacheName !== 'rq-map-tiles-v1') {
             return caches.delete(cacheName);
           }
         })
@@ -278,6 +278,32 @@ self.addEventListener('fetch', (event) => {
             throw error;
           });
         })
+    );
+    return;
+  }
+
+  // Caching for Map Tiles (Cache First, fallback to Network)
+  if (url.hostname.includes('tile.openstreetmap.org') && event.request.method === 'GET') {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse; // Return from cache immediately
+        }
+        return fetch(event.request).then((networkResponse) => {
+          // map tiles are often opaque responses (status 0) if no-cors
+          if (!networkResponse || (networkResponse.status !== 200 && networkResponse.status !== 0)) {
+            return networkResponse;
+          }
+          const responseToCache = networkResponse.clone();
+          caches.open('rq-map-tiles-v1').then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+          return networkResponse;
+        }).catch((err) => {
+          console.log('Map tile fetch failed', err);
+          throw err;
+        });
+      })
     );
     return;
   }

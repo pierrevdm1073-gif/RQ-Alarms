@@ -21,6 +21,7 @@ interface DriverLocation {
   lng: number;
   lastUpdated: number;
   status?: 'available' | 'busy';
+  activeStatusText?: string;
   activeAlarm?: Alarm;
   history?: { lat: number, lng: number, timestamp: number }[];
   isOffline?: boolean;
@@ -197,27 +198,30 @@ function VehicleMarker({ vehicle, activeDriverName }: { key?: number | string, v
   );
 }
 
-function DriverMarker({ driver, vehicleRegistration }: { key?: number | string, driver: DriverLocation & { status: 'available' | 'busy', activeAlarm?: Alarm }, vehicleRegistration?: string }) {
+function DriverMarker({ driver, vehicleRegistration }: { key?: number | string, driver: DriverLocation & { status: 'available' | 'busy', activeAlarm?: Alarm, activeStatusText?: string }, vehicleRegistration?: string }) {
   const map = useMap();
 
   const getStatusText = () => {
     if (driver.isSOS) {
       return 'EMERGENCY SOS';
     }
+    if (driver.activeStatusText) {
+      return driver.activeStatusText;
+    }
     if (driver.activeAlarm) {
       return driver.activeAlarm.status.replace('_', ' ');
     }
-    return driver.status === 'busy' ? 'Busy' : 'Available';
+    return driver.status === 'busy' ? 'Busy' : 'Idle / Available';
   };
 
   const getStatusColor = () => {
     if (driver.isSOS) return 'text-red-650 animate-pulse font-black';
+    if (driver.activeStatusText === 'En Route' || driver.activeAlarm?.status === 'en_route') return 'text-amber-600 font-bold';
+    if (driver.activeStatusText === 'On Scene' || driver.activeAlarm?.status === 'arrived') return 'text-blue-600 font-bold';
     if (driver.activeAlarm) {
-      if (driver.activeAlarm.status === 'en_route') return 'text-blue-600';
-      if (driver.activeAlarm.status === 'arrived') return 'text-amber-600';
-      return 'text-amber-600';
+      return 'text-amber-600 font-bold';
     }
-    return driver.status === 'busy' ? 'text-red-600' : 'text-rq-gold';
+    return driver.status === 'busy' ? 'text-red-600' : 'text-emerald-600';
   };
 
   return (
@@ -456,9 +460,25 @@ export default function DriverMap({ locations, alarms, drivers, vehicles = [], o
                </div>
                <div className="flex items-center justify-between mt-1">
                  <div className="flex items-center gap-1.5">
-                   <span className={`w-2 h-2 rounded-full ${driver.isSOS ? 'bg-white animate-[ping_1.5s_infinite]' : driver.isOffline ? 'bg-slate-400' : driver.status === 'busy' ? (driver.activeAlarm ? 'bg-amber-500' : 'bg-red-500') : 'bg-rq-gold'}`}></span>
-                   <span className={`text-xs capitalize ${driver.isSOS ? 'text-white font-bold' : 'text-slate-600'}`}>
-                     {driver.isSOS ? 'EMERGENCY SOS' : driver.isOffline ? 'Offline' : (driver.status === 'busy' ? (driver.activeAlarm ? 'Dispatched' : 'Busy') : 'Available')}
+                   <span className={`w-2 h-2 rounded-full ${
+                     driver.isSOS 
+                       ? 'bg-white animate-[ping_1.5s_infinite]' 
+                       : driver.isOffline 
+                       ? 'bg-slate-400' 
+                       : driver.activeStatusText === 'En Route' || driver.activeAlarm
+                       ? 'bg-amber-500 animate-pulse'
+                       : driver.activeStatusText === 'On Scene'
+                       ? 'bg-blue-500 animate-pulse'
+                       : driver.status === 'busy' 
+                       ? 'bg-red-500' 
+                       : 'bg-emerald-500'
+                   }`}></span>
+                   <span className={`text-xs font-semibold ${driver.isSOS ? 'text-white font-bold' : 'text-slate-700'}`}>
+                     {driver.isSOS 
+                       ? 'EMERGENCY SOS' 
+                       : driver.isOffline 
+                       ? 'Offline' 
+                       : (driver.activeStatusText || (driver.status === 'busy' ? (driver.activeAlarm ? 'En Route' : 'Busy') : 'Idle / Available'))}
                    </span>
                  </div>
                </div>
