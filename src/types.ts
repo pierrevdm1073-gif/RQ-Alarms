@@ -44,9 +44,19 @@ export interface Feedback {
   address: string;
   feedback_text: string;
   image_analysis?: string;
+  admin_response?: string;
   driver_name?: string;
   vehicle_registration?: string;
   created_at: string;
+}
+
+export interface DriverShift {
+  id: number;
+  driver_id: number;
+  start_time: string;
+  end_time?: string | null;
+  distance_covered: number;
+  alarms_completed: number;
 }
 
 export interface Client {

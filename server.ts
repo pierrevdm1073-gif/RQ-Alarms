@@ -1033,7 +1033,7 @@ db.pragma('journal_mode = WAL');
         SELECT a.*, v.registration as vehicle_registration
         FROM alarms a
         LEFT JOIN vehicles v ON a.vehicle_id = v.id
-        WHERE a.assigned_driver_id = ? AND a.status = 'completed'
+        WHERE a.assigned_driver_id = ? AND a.status IN ('completed', 'cancelled')
         ORDER BY a.created_at DESC
       `).all(driverId);
 
@@ -1045,9 +1045,24 @@ db.pragma('journal_mode = WAL');
         ORDER BY f.created_at DESC
       `).all(driverId);
 
+      const shifts = db.prepare(`
+        SELECT * FROM driver_shifts 
+        WHERE driver_id = ? 
+        ORDER BY start_time DESC
+      `).all(driverId);
+
+      const activeShift = db.prepare(`
+        SELECT * FROM driver_shifts 
+        WHERE driver_id = ? AND end_time IS NULL 
+        ORDER BY start_time DESC 
+        LIMIT 1
+      `).get(driverId);
+
       res.json({
         completedAlarms,
-        feedbacks
+        feedbacks,
+        shifts,
+        activeShift
       });
     } catch (error: any) {
       console.error('Error fetching driver history:', error);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { User, Vehicle, Alarm, DriverCoordinates } from '../types';
-import { Car, MapPin, Clock, CheckCircle2, AlertCircle, Bell, X, Smartphone, LogOut, Settings as SettingsIcon, AlertTriangle, Volume2, VolumeX, Activity, History, Navigation, Radio, Crosshair } from 'lucide-react';
+import { Car, MapPin, Clock, CheckCircle2, AlertCircle, Bell, X, Smartphone, LogOut, Settings as SettingsIcon, AlertTriangle, Volume2, VolumeX, Activity, History, Navigation, Radio, Crosshair, SunMedium, ShieldAlert, Zap } from 'lucide-react';
 import FeedbackForm from './FeedbackForm';
 import { io } from 'socket.io-client';
 import Logo from './Logo';
@@ -18,8 +18,6 @@ interface DriverDashboardProps {
 }
 
 export default function DriverDashboard({ user, onLogout }: DriverDashboardProps) {
-  useWakeLock(true); // Keep screen awake while dashboard is open
-
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'dispatches' | 'performance' | 'history'>('dispatches');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => {
@@ -372,10 +370,35 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
   });
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
-  const [wakeLock, setWakeLock] = useState<any>(null);
-  const [wakeLockRequested, setWakeLockRequested] = useState(() => {
-    return localStorage.getItem(`rq_shift_active_${user.id}`) === 'true';
+  const [wakeLockUserEnabled, setWakeLockUserEnabled] = useState<boolean>(() => {
+    return localStorage.getItem(`rq_wake_lock_enabled_${user.id}`) !== 'false';
   });
+
+  // Screen Wake Lock API integration: Keep screen active while viewing active dispatches or on shift
+  const shouldKeepScreenAwake = (shiftActive || alarms.length > 0) && wakeLockUserEnabled;
+  const {
+    isSupported: isWakeLockSupported,
+    isLocked: isWakeLockActive,
+    request: requestWakeLock,
+    release: releaseWakeLock,
+    toggle: toggleWakeLock
+  } = useWakeLock(shouldKeepScreenAwake);
+
+  const handleToggleWakeLock = async () => {
+    if (!isWakeLockSupported) {
+      alert("Screen Wake Lock API is not supported on this browser or device.");
+      return;
+    }
+    const nextState = !wakeLockUserEnabled;
+    setWakeLockUserEnabled(nextState);
+    localStorage.setItem(`rq_wake_lock_enabled_${user.id}`, nextState ? 'true' : 'false');
+    if (nextState) {
+      await requestWakeLock();
+    } else {
+      await releaseWakeLock();
+    }
+  };
+
   const [showEndShiftConfirmModal, setShowEndShiftConfirmModal] = useState(false);
   const [isEndingShift, setIsEndingShift] = useState(false);
   const [shiftSummary, setShiftSummary] = useState<{
@@ -406,42 +429,6 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
       }
     }
   }, [alarms]);
-
-  const requestWakeLock = useCallback(async () => {
-    if (!('wakeLock' in navigator) || !shiftActive || document.visibilityState !== 'visible') return;
-    
-    try {
-      const lock = await (navigator as any).wakeLock.request('screen');
-      setWakeLock(lock);
-      
-      lock.addEventListener('release', () => {
-        setWakeLock(null);
-      });
-    } catch (err: any) {
-      if (err.name !== 'NotAllowedError') {
-        console.error(`${err.name}, ${err.message}`);
-      } else {
-        console.warn('Wake Lock disallowed by permissions policy. Ensure the app is served over HTTPS and the policy allows it.');
-      }
-    }
-  }, [shiftActive]);
-
-  useEffect(() => {
-    const handleVisibilityChange = async () => {
-      if (document.visibilityState === 'visible' && wakeLockRequested) {
-        await requestWakeLock();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (wakeLock) {
-        wakeLock.release().catch(() => {});
-      }
-    };
-  }, [wakeLock, wakeLockRequested, requestWakeLock]);
 
   useEffect(() => {
     window.addEventListener('beforeinstallprompt', (e) => {
@@ -532,13 +519,11 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
       setShiftActive(true);
       setDeviceShiftConfirmed(true);
       localStorage.setItem(`rq_shift_active_${user.id}`, 'true');
-      setWakeLockRequested(true);
     });
 
     socket.on('shift_ended', () => {
       setShiftActive(false);
       setDeviceShiftConfirmed(false);
-      setWakeLockRequested(false);
       localStorage.setItem(`rq_shift_active_${user.id}`, 'false');
       setDriverLocation(null);
     });
@@ -1071,18 +1056,8 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
       setShiftActive(true);
       setDeviceShiftConfirmed(true);
       localStorage.setItem(`rq_shift_active_${user.id}`, 'true');
-      setWakeLockRequested(true);
-      
-      // Attempt to get wake lock on user gesture
-      if ('wakeLock' in navigator) {
-        try {
-          const lock = await (navigator as any).wakeLock.request('screen');
-          setWakeLock(lock);
-        } catch (err: any) {
-          if (err.name !== 'NotAllowedError') {
-            console.error('Wake Lock error:', err);
-          }
-        }
+      if (wakeLockUserEnabled) {
+        requestWakeLock().catch(() => {});
       }
     } catch (error) {
       console.error('Error starting shift:', error);
@@ -1137,11 +1112,6 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
     setIsSOS(false);
     localStorage.setItem(`rq_driver_sos_${user.id}`, 'false');
     setDeviceShiftConfirmed(false);
-    setWakeLockRequested(false);
-    if (wakeLock) {
-      wakeLock.release().catch(() => {});
-      setWakeLock(null);
-    }
     localStorage.setItem(`rq_shift_active_${user.id}`, 'false');
     setDriverLocation(null);
     
@@ -1216,6 +1186,26 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
           )}
         </div>
         <div className="flex gap-1.5 items-center">
+          <button
+            id="btn-toggle-wake-lock"
+            onClick={handleToggleWakeLock}
+            className={`p-2 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
+              isWakeLockActive 
+                ? 'text-amber-600 bg-amber-50 hover:bg-amber-100 border border-amber-200 shadow-2xs' 
+                : isWakeLockSupported
+                  ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                  : 'text-slate-300 opacity-40 cursor-not-allowed'
+            }`}
+            title={
+              !isWakeLockSupported 
+                ? "Screen Wake Lock not supported in this browser" 
+                : isWakeLockActive 
+                  ? "Screen Wake Lock Active (Screen will not sleep during dispatches). Click to toggle off." 
+                  : "Screen Wake Lock Inactive. Click to keep screen awake during dispatches."
+            }
+          >
+            <SunMedium size={18} className={isWakeLockActive ? "animate-pulse text-amber-500" : ""} />
+          </button>
           <button
             onClick={() => setTtsEnabled(prev => !prev)}
             className={`p-2 rounded-lg transition-colors flex items-center justify-center ${
@@ -1447,14 +1437,14 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
           }`}
         >
           <History size={15} />
-          History Log
+          Dispatch History
         </button>
       </div>
 
       {activeTab === 'performance' ? (
         <DriverPerformance user={user} />
       ) : activeTab === 'history' ? (
-        <DriverHistory user={user} />
+        <DriverHistory user={user} currentShiftActive={shiftActive} currentVehicle={selectedVehicle} />
       ) : (
         <>
           {/* Shift Control Panel - Unified */}
@@ -1529,22 +1519,37 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center gap-3">
-              {'wakeLock' in navigator && (
-                <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-100">
-                  <div className={`w-2 h-2 rounded-full ${wakeLock ? 'bg-rq-gold shadow-[0_0_8px_rgba(226,214,112,0.5)]' : 'bg-slate-300'}`}></div>
-                  <span className="text-xs font-medium text-slate-600">Screen Awake</span>
-                  {!wakeLock && shiftActive && (
-                    <button 
-                      onClick={() => {
-                        setWakeLockRequested(true);
-                        requestWakeLock();
-                      }}
-                      className="text-[10px] bg-rq-gold/20 text-rq-gold px-1.5 py-0.5 rounded hover:bg-rq-gold/30 transition-colors"
-                    >
-                      Retry
-                    </button>
+              {isWakeLockSupported && (
+                <button 
+                  type="button"
+                  onClick={handleToggleWakeLock}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all cursor-pointer select-none ${
+                    isWakeLockActive 
+                      ? 'bg-amber-50/80 border-amber-200 text-amber-900 shadow-2xs' 
+                      : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                  }`}
+                  title={
+                    isWakeLockActive 
+                      ? "Screen Wake Lock Active: Phone screen is prevented from sleeping. Click to toggle." 
+                      : "Screen Wake Lock Inactive. Click to keep screen awake."
+                  }
+                >
+                  <div className="relative flex h-2 w-2">
+                    {isWakeLockActive && (
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    )}
+                    <span className={`relative inline-flex rounded-full h-2 w-2 ${isWakeLockActive ? 'bg-amber-500' : 'bg-slate-300'}`}></span>
+                  </div>
+                  <span className="text-xs font-bold flex items-center gap-1">
+                    <SunMedium size={13} className={isWakeLockActive ? "text-amber-600" : "text-slate-400"} />
+                    {isWakeLockActive ? 'Screen Awake' : 'Screen Awake: Off'}
+                  </span>
+                  {!isWakeLockActive && (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded ml-0.5">
+                      Enable
+                    </span>
                   )}
-                </div>
+                </button>
               )}
               {selectedVehicle && (
                 <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-lg border border-slate-100">
@@ -1574,11 +1579,19 @@ export default function DriverDashboard({ user, onLogout }: DriverDashboardProps
             isRefreshingGPS={isRefreshingGPS}
           />
 
-          <div className="flex items-center justify-between mb-4 mt-8">
-            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-              <AlertCircle className="text-amber-500" />
-              Dispatched Alarms ({alarms.length})
-            </h3>
+          <div className="flex items-center justify-between mb-4 mt-8 flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                <AlertCircle className="text-amber-500" />
+                Dispatched Alarms ({alarms.length})
+              </h3>
+              {alarms.length > 0 && isWakeLockActive && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs">
+                  <SunMedium size={11} className="text-amber-600" />
+                  Screen Awake
+                </span>
+              )}
+            </div>
             {alarms.length > 1 && (
               <button
                 onClick={optimizeRoute}

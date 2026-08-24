@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { Alarm, User, Vehicle } from '../types';
-import { Camera, Send, X, Loader2, Image as ImageIcon, AlertCircle, Car } from 'lucide-react';
+import { Camera, Send, X, Loader2, Image as ImageIcon, AlertCircle, Car, Sun } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
+import { useWakeLock } from '../hooks/useWakeLock';
 
 interface FeedbackFormProps {
   alarm: Alarm;
@@ -12,6 +13,9 @@ interface FeedbackFormProps {
 }
 
 export default function FeedbackForm({ alarm, user, vehicle, onComplete, onCancel }: FeedbackFormProps) {
+  // Keep screen awake while writing incident report on active dispatch
+  const { isLocked: isScreenAwake } = useWakeLock(true);
+
   const [clientName, setClientName] = useState(alarm.client_name);
   const [address, setAddress] = useState(alarm.address);
   const [feedbackText, setFeedbackText] = useState('');
